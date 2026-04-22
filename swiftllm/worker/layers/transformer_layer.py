@@ -333,20 +333,40 @@ class LlamaTransformerLayer:
             events.pf_time("lnch_m")
             self.events[cur_stage].qkvtr_e.synchronize()
             events.pf_time("cdec_s")
-            torch.ops.pacpu.paged_attention_cpu(
-                cur_layer_id,
-                self.model_config.softmax_scale,
-                batch.seq_ids_list[batch.num_prgds:],
-                batch.seq_lens_list[batch.num_prgds:],
+            if self.engine_config.int8_cpu_kv:
+                # M6: CPU KV cache is INT8; the kernel fuses dequantize using
+                # the parallel FP16 scale tensors. See docs/int8-design.md §5.
+                torch.ops.pacpu.paged_attention_cpu_int8(
+                    cur_layer_id,
+                    self.model_config.softmax_scale,
+                    batch.seq_ids_list[batch.num_prgds:],
+                    batch.seq_lens_list[batch.num_prgds:],
 
-                self.swapper.q_cpu[:batch.num_cdecs],
-                self.swapper.k_cpu[:batch.num_cdecs],
-                self.swapper.v_cpu[:batch.num_cdecs],
-                self.swapper.k_swap,
-                self.swapper.v_swap,
-                self.swapper.cpu_block_table,
-                oc
-            )
+                    self.swapper.q_cpu[:batch.num_cdecs],
+                    self.swapper.k_cpu[:batch.num_cdecs],
+                    self.swapper.v_cpu[:batch.num_cdecs],
+                    self.swapper.k_swap,
+                    self.swapper.v_swap,
+                    self.swapper.k_swap_scales,
+                    self.swapper.v_swap_scales,
+                    self.swapper.cpu_block_table,
+                    oc
+                )
+            else:
+                torch.ops.pacpu.paged_attention_cpu(
+                    cur_layer_id,
+                    self.model_config.softmax_scale,
+                    batch.seq_ids_list[batch.num_prgds:],
+                    batch.seq_lens_list[batch.num_prgds:],
+
+                    self.swapper.q_cpu[:batch.num_cdecs],
+                    self.swapper.k_cpu[:batch.num_cdecs],
+                    self.swapper.v_cpu[:batch.num_cdecs],
+                    self.swapper.k_swap,
+                    self.swapper.v_swap,
+                    self.swapper.cpu_block_table,
+                    oc
+                )
             events.pf_time("cdec_e")
             with torch.cuda.stream(self.cpu_communication_stream):
                 o[-batch.num_cdecs:, :].copy_(oc, non_blocking=True)

@@ -40,6 +40,10 @@ typedef float otpt_t;
 
 #define QH_PER_KVH (NUM_Q_HEADS / NUM_KV_HEADS)
 #define BLOCK_NELEM (NUM_KV_HEADS * BLOCK_SIZE * HEAD_DIM)
+// Per-token scale tensor elements per block (M6: --int8-cpu-kv).
+// One FP16 scale per (kv_head, token); head_dim is broadcast. See
+// docs/int8-design.md §4.
+#define SCALE_NELEM (NUM_KV_HEADS * BLOCK_SIZE)
 
 #define MAX_BATCH_SIZE 4096
 #define MAX_WS 256

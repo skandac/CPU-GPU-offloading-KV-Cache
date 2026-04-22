@@ -123,9 +123,58 @@ void paged_attention_cpu(
   #endif
 }
 
+// M6: INT8 CPU KV-cache variant. Identical surface to paged_attention_cpu
+// except k_cache / v_cache are INT8 tensors and two extra FP16 scale
+// tensors carry per-token quantization scales. See docs/int8-design.md.
+void paged_attention_cpu_int8(
+  int64_t cur_layer,
+  double softmax_scale,
+  const std::vector<int64_t> &seq_ids,
+  const std::vector<int64_t> &seq_lengths,
+
+  at::Tensor q,              // fp16 [batch_size, num_q_heads, head_dim]
+  at::Tensor k,              // fp16 [batch_size, num_kv_heads, head_dim]
+  at::Tensor v,              // fp16 [batch_size, num_kv_heads, head_dim]
+  at::Tensor k_cache,        // int8 [..., num_kv_heads, block_size, head_dim]
+  at::Tensor v_cache,        // int8 same
+  at::Tensor k_cache_scales, // fp16 [..., num_kv_heads, block_size, 1]
+  at::Tensor v_cache_scales, // fp16 same
+  at::Tensor block_table,
+  at::Tensor o
+) {
+  int batch_size = q.size(0);
+  int num_q_heads = q.size(1);
+  int num_layers = k_cache.size(0);
+  int num_blocks = k_cache.size(1);
+  int num_kv_heads = k_cache.size(2);
+  int block_size = k_cache.size(3);
+  int head_dim = k_cache.size(4);
+  int block_table_width = block_table.size(1);
+
+  assert_hyper_params_expected(num_q_heads, num_kv_heads, num_layers, head_dim, block_size);
+
+  auto qbatch_p = (data_t*) q.data_ptr<at_data_t>();
+  auto kbatch_p = (data_t*) k.data_ptr<at_data_t>();
+  auto vbatch_p = (data_t*) v.data_ptr<at_data_t>();
+  auto obatch_p = o.data_ptr<otpt_t>();
+  auto kcache_p = k_cache.data_ptr<int8_t>();
+  auto vcache_p = v_cache.data_ptr<int8_t>();
+  auto kscale_p = (data_t*) k_cache_scales.data_ptr<at_data_t>();
+  auto vscale_p = (data_t*) v_cache_scales.data_ptr<at_data_t>();
+  auto block_table_p = block_table.data_ptr<int32_t>();
+
+  ispc_attention_tasks_int8(
+    cur_layer, num_blocks, batch_size, block_table_width, softmax_scale,
+    seq_ids, seq_lengths,
+    qbatch_p, kbatch_p, vbatch_p, obatch_p,
+    kcache_p, vcache_p, kscale_p, vscale_p, block_table_p
+  );
+}
+
 TORCH_LIBRARY(pacpu, m) {
 #ifdef USE_ATEN_OPER
   m.def("paged_attention_cpu_torch", &paged_attention_cpu_torch);
 #endif
   m.def("paged_attention_cpu", &paged_attention_cpu);
+  m.def("paged_attention_cpu_int8", &paged_attention_cpu_int8);
 }

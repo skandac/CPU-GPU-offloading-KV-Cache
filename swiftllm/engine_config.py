@@ -37,6 +37,11 @@ class EngineConfig:
     monitor_performance: bool = False   # Can be altered while running
     always_use_gpu: bool = False        # Can be altered while running
 
+    # Quantization switches
+    int8_cpu_kv: bool = False           # Store CPU KV cache as INT8 with per-token scales (M6)
+    int8_transfer: bool = False         # Compress KV blocks to INT8 over PCIe (M7)
+    quant_granularity: str = "per-token"  # per-token | per-channel | per-token-per-head
+
     # Parallel parameter
     tensor_parallel_degree: int = 1
 
@@ -162,4 +167,22 @@ class EngineConfig:
             "--extra-layer-for-cprf",
             action="store_true",
             help="Use an extra layer for CPRF",
+        )
+
+        parser.add_argument(
+            "--int8-cpu-kv",
+            action="store_true",
+            help="Store the CPU KV cache as INT8 with per-token FP16 scales (M6)",
+        )
+        parser.add_argument(
+            "--int8-transfer",
+            action="store_true",
+            help="Compress KV blocks to INT8 during the H2D/D2H transfer (M7)",
+        )
+        parser.add_argument(
+            "--quant-granularity",
+            type=str,
+            default="per-token",
+            choices=["per-token", "per-channel", "per-token-per-head"],
+            help="Scale granularity for INT8 quantization (M10 ablation)",
         )
