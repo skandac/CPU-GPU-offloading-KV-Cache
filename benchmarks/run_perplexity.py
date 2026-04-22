@@ -32,13 +32,21 @@ VARIANTS:
     perplexity delta.
 
 CAVEAT:
-    The NEO engine is request-driven; to run a plain forward for PPL we
-    construct a single long request and read the per-token logits before
-    sampling. The helper NEOForwardAdapter below wraps that call — its
-    exact API is TODO(gpu-verify) because the forward method is not
-    exposed at the engine level (only via request completion). On GPU
-    systems, plumb through swiftllm.worker.model.LlamaModel.forward and
-    intercept the logits tensor before argmax.
+    NEO's int8 KV cache only materializes on *offloaded* blocks. A
+    2048-token perplexity window never triggers offload, so running
+    perplexity through the real NEO engine with --int8-cpu-kv would
+    return the FP16 number. Instead, for int8 variants we load the
+    reference FP16 model via HF Transformers and register forward
+    hooks that round-trip K / V through the *same* quantizer NEO uses
+    (swiftllm.worker.quantize.roundtrip_int8). This isolates the
+    accuracy question ("does the quantization math hurt logits") from
+    the engine-implementation question ("does pacpu's fused dequant
+    match spec"), which is covered separately by
+    tests/test_int8_correctness.py's component arm and by the end-to-
+    end HumanEval / ROUGE harnesses that DO go through the engine.
+
+    See benchmarks/_quant_hooks.py for the hook math and a full
+    list of the caveats this simulation carries.
 """
 
 from __future__ import annotations
@@ -88,7 +96,11 @@ def load_wikitext_tokens(tokenizer, path: str = WIKITEXT_PATH) -> torch.Tensor:
 # Forward adapters — one per variant family
 # ---------------------------------------------------------------------------
 class HFForwardAdapter:
-    """Forward wrapper for the vLLM / HF baseline — uses transformers directly."""
+    """
+    Plain HF Transformers forward — used as the reference (FP16) path
+    and by the vLLM variant (vLLM doesn't expose a PPL-suitable logit
+    interface, so we use HF as a clean-room reference there too).
+    """
 
     def __init__(self, model_path: str, dtype=torch.float16):
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -96,41 +108,65 @@ class HFForwardAdapter:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path, torch_dtype=dtype, device_map="cuda"
         ).eval()
+        # head_dim is stashed for subclasses that need to reshape to
+        # NEO's block layout.
+        self.head_dim = getattr(
+            self.model.config, "head_dim",
+            self.model.config.hidden_size // self.model.config.num_attention_heads,
+        )
 
     @torch.inference_mode()
     def logits(self, window_ids: torch.Tensor) -> torch.Tensor:
         return self.model(window_ids.unsqueeze(0).cuda()).logits[0]
 
 
-class NEOForwardAdapter:
+class NEOForwardAdapter(HFForwardAdapter):
     """
-    Forward wrapper for NEO variants. Delegates to swiftllm's worker model
-    and applies the variant's quantization settings via engine config.
+    HF forward with a KV fake-quantization hook layered on.
 
-    TODO(gpu-verify): the current NEO engine only exposes completion-style
-    calls. This adapter will need a small shim in swiftllm/worker/model.py
-    that returns logits without sampling — add once on a GPU host.
+    For ``variant="fp16-neo"`` the hook is not installed — the FP16
+    reference and NEO's FP16 path are the same numerically (modulo
+    kernel choice, which does not change the quantization question).
+
+    For ``variant="int8-cpu-kv"`` and ``variant="int8-transfer"`` the
+    hook rewrites every Llama attention K / V projection output to its
+    round-tripped int8 approximation using the requested granularity.
+    See benchmarks/_quant_hooks.py for the math and caveats.
     """
 
-    def __init__(self, model_path: str, variant: str):
-        self.model_path = model_path
+    def __init__(
+        self,
+        model_path: str,
+        variant: str,
+        granularity: str = "per-token",
+    ):
+        super().__init__(model_path)
         self.variant = variant
-        # Intentionally not importing NEO internals here — keeps this file
-        # importable on a laptop for static analysis / unit tests.
-        raise NotImplementedError(
-            "NEOForwardAdapter is a stub — wire to swiftllm.worker.model.LlamaModel.forward "
-            "when running on a GPU host. See TODO(gpu-verify) in this file."
-        )
+        self.granularity = granularity
+        self._hook_handles = []
+        if variant in ("int8-cpu-kv", "int8-transfer"):
+            from _quant_hooks import install_kv_quant_hooks  # local import
+            from swiftllm.worker.quantize import QuantGranularity
+            self._hook_handles = install_kv_quant_hooks(
+                self.model,
+                head_dim=self.head_dim,
+                granularity=QuantGranularity(granularity),
+            )
+            print(
+                f"[info] installed {len(self._hook_handles)} KV quant hooks "
+                f"(variant={variant}, granularity={granularity})"
+            )
 
-    @torch.inference_mode()
-    def logits(self, window_ids: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError
+    def close(self) -> None:
+        from _quant_hooks import remove_kv_quant_hooks
+        remove_kv_quant_hooks(self._hook_handles)
+        self._hook_handles = []
 
 
-def build_adapter(variant: str, model_path: str):
+def build_adapter(variant: str, model_path: str, granularity: str = "per-token"):
     if variant == "vllm":
         return HFForwardAdapter(model_path)
-    return NEOForwardAdapter(model_path, variant)
+    return NEOForwardAdapter(model_path, variant, granularity=granularity)
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +227,7 @@ def main():
     print(f"[info] variant: {args.variant} — {variant_spec.description}")
     g_tag = f"_{args.quant_granularity}" if "int8" in args.variant else ""
 
-    adapter = build_adapter(args.variant, args.model_path)
+    adapter = build_adapter(args.variant, args.model_path, args.quant_granularity)
 
     # Tokenizer: HF path exposes it directly; NEO path should also expose
     # one via the shim — here we assume HF-style tokenizer access.
@@ -214,6 +250,12 @@ def main():
         w.writerow(["variant", "window_size", "num_windows", "nll_mean", "perplexity"])
         w.writerow([args.variant, args.window, args.max_windows, mean_nll, ppl])
     print(f"[ok] wrote {csv_path}")
+
+    # Clean up hooks so the process can shut down cleanly (matters when
+    # this is imported by a sweep driver rather than run as __main__).
+    close = getattr(adapter, "close", None)
+    if callable(close):
+        close()
 
 
 if __name__ == "__main__":

@@ -166,10 +166,24 @@ All results CSVs land under `benchmarks/results/`. Re-run
   kernel lands.
 - **TTFT is approximated** in `benchmarks/run_latency.py` unless
   `--ttft-mode=stream` is set; true TTFT requires the streaming API.
-- **Perplexity for NEO variants** requires a small `LlamaModel.forward`
-  logits shim (see `benchmarks/run_perplexity.py:NEOForwardAdapter`).
-  Until that shim lands, PPL cells for `int8-cpu-kv` / `int8-transfer`
-  will stay `TODO`.
+- **Perplexity for NEO variants uses an HF Transformers simulation,
+  not the NEO engine.** A single 2048-token perplexity window never
+  triggers KV offload, so running PPL through the real NEO engine with
+  `--int8-cpu-kv` would return the FP16 number (the quantization path
+  is never exercised). Instead, `benchmarks/run_perplexity.py`'s
+  `NEOForwardAdapter` loads the reference FP16 model via HF and
+  installs forward hooks on every Llama attention's `k_proj` / `v_proj`
+  that round-trip K / V through the exact same
+  `swiftllm.worker.quantize.roundtrip_int8` function NEO uses. This
+  isolates "does the int8 math hurt accuracy" (this harness) from
+  "does pacpu's fused dequant match spec" (covered by
+  `tests/test_int8_correctness.py` component arm + the end-to-end
+  HumanEval / ROUGE harnesses, which go through the real engine and
+  do see offload). Hook math quantizes pre-RoPE; NEO quantizes
+  post-RoPE. These are numerically equivalent to 1e-4 for per-token
+  granularity (RoPE is a rotation, preserves per-token amax); they
+  differ slightly for per-channel, documented in
+  `benchmarks/_quant_hooks.py`.
 - **`int8-cpu-kv` flag spelling** is provisional; once M6 merges its
   CLI name takes precedence and `benchmarks/_common.py:resolve_variant`
   should be updated to match.

@@ -124,18 +124,18 @@ def test_quantize_dequantize_zero_block():
 # ---------------------------------------------------------------------------
 # Integration: end-to-end logit MSE on 10 fixed prompts.
 # ---------------------------------------------------------------------------
-def _cuda_and_pacpu_available() -> bool:
+def _cuda_and_hf_available() -> bool:
+    """
+    The integration arm uses HF Transformers + our fake-quant hooks
+    (see benchmarks/_quant_hooks.py for the reasoning — we deliberately
+    do NOT drive this through NEO's engine, since a single forward
+    window doesn't trigger offload and therefore doesn't exercise
+    int8_cpu_kv at all).
+    """
     if not torch.cuda.is_available():
         return False
     try:
-        import swiftllm_c  # noqa: F401
-    except Exception:
-        return False
-    try:
-        # pacpu is loaded lazily via torch.ops when the worker starts;
-        # the library has to be built per-model (NUM_LAYERS etc. are
-        # #defined at compile time). Presence of the op is enough here.
-        _ = torch.ops.pacpu.paged_attention_cpu_int8
+        import transformers  # noqa: F401
     except Exception:
         return False
     return True
@@ -155,6 +155,10 @@ def _resolve_model_path() -> str | None:
         "/models/Llama-2-7b-hf",
         "/models/Meta-Llama-3-8B",
         str(Path.home() / "models" / "Llama-2-7b-hf"),
+        str(Path.home() / "weights" / "Llama-2-7b-hf"),
+        str(Path.home() / "weights" / "Llama-3-8B"),
+        "/home/ubuntu/weights/Llama-2-7b-hf",
+        "/home/ubuntu/weights/Llama-3-8B",
     ):
         if Path(candidate).exists():
             return candidate
@@ -162,39 +166,79 @@ def _resolve_model_path() -> str | None:
 
 
 @pytest.mark.skipif(
-    not _cuda_and_pacpu_available(),
-    reason="requires CUDA + compiled pacpu extension (M6 gates on GPU)",
+    not _cuda_and_hf_available(),
+    reason="requires CUDA + transformers (integration arm)",
 )
 def test_logit_mse_fp16_vs_int8():
     """
-    Run the 10 fixed prompts through both the fp16 and --int8-cpu-kv
-    paths on the same engine config. The two logit tensors must agree
-    to MSE < 1e-3 (M6 acceptance bar, docs/int8-design.md §7).
+    Logit MSE bar from docs/int8-design.md §7: the FP16 and INT8-
+    quantized KV paths must agree to MSE < 1e-3 on the 10 fixed
+    prompts.
 
-    TODO(gpu-verify): wire this to swiftllm.Engine once the
-    run-a-prompt-and-return-logits harness is in place (same TODO as
-    benchmarks/run_perplexity.py's NEOForwardAdapter stub). For now
-    this test is structured to fail-fast with a clear message so the
-    GPU-side follow-up knows exactly what to implement.
+    We measure this at the quantization-math level, not through NEO's
+    engine: a single forward window wouldn't trigger KV offload, so
+    --int8-cpu-kv would be a no-op and the test would be vacuous.
+    Instead we reuse the same forward hooks the perplexity harness
+    uses (benchmarks/_quant_hooks.install_kv_quant_hooks), which
+    dispatch through the exact same quantize.roundtrip_int8 function
+    block_swapper._swap_blocks_int8_cpu_kv uses. If this passes, the
+    quantization math meets the bar; if it fails, the rest of M6 is
+    moot.
     """
     model_path = _resolve_model_path()
     if model_path is None:
         pytest.skip("no model checkpoint available for integration test")
 
-    # Import lazily so the file is still collectable without a GPU.
     try:
-        from swiftllm.engine import Engine  # type: ignore[attr-defined]
-        from swiftllm.engine_config import EngineConfig
+        from transformers import AutoModelForCausalLM, AutoTokenizer
     except Exception as e:  # pragma: no cover — environment-dependent
-        pytest.skip(f"SwiftLLM engine import failed: {e!r}")
+        pytest.skip(f"transformers import failed: {e!r}")
 
-    # TODO(gpu-verify): when Engine exposes a .forward_logits() helper
-    # (or equivalent), replace this block with real logit collection.
-    # The expected shape is [num_prompts, vocab_size] for the last-token
-    # logit of each prompt. We raise instead of silently passing so an
-    # incomplete integration test cannot mask a real regression.
-    raise NotImplementedError(
-        "Integration harness not yet wired — see TODO(gpu-verify). "
-        "Component tests above cover the quantizer; this test is the "
-        "end-to-end gate that must be completed before M6 is signed off."
+    # Import the hooks lazily — keeps this file collectable on a laptop
+    # even if the benchmarks package path isn't on sys.path at import time.
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "benchmarks"))
+    from _quant_hooks import install_kv_quant_hooks, remove_kv_quant_hooks
+    from swiftllm.worker.quantize import QuantGranularity
+
+    tok = AutoTokenizer.from_pretrained(model_path)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path, torch_dtype=torch.float16, device_map="cuda"
+    ).eval()
+    head_dim = getattr(
+        model.config, "head_dim",
+        model.config.hidden_size // model.config.num_attention_heads,
+    )
+
+    # Tokenize once; pad to matching lengths so we can compare per-prompt
+    # last-token logits directly without gathering per-prompt lengths.
+    enc = tok(list(FIXED_PROMPTS), return_tensors="pt", padding=True)
+    input_ids = enc.input_ids.cuda()
+    attention_mask = enc.attention_mask.cuda()
+
+    @torch.inference_mode()
+    def last_token_logits() -> torch.Tensor:
+        out = model(input_ids=input_ids, attention_mask=attention_mask)
+        # Last non-pad position per prompt.
+        lengths = attention_mask.sum(dim=1) - 1
+        idx = torch.arange(out.logits.shape[0], device=out.logits.device)
+        return out.logits[idx, lengths]  # [num_prompts, vocab_size]
+
+    # FP16 reference.
+    ref = last_token_logits().float()
+
+    # INT8 (per-token, matching M6's default).
+    handles = install_kv_quant_hooks(
+        model, head_dim=head_dim, granularity=QuantGranularity.PER_TOKEN
+    )
+    try:
+        got = last_token_logits().float()
+    finally:
+        remove_kv_quant_hooks(handles)
+
+    mse = torch.mean((got - ref) ** 2).item()
+    print(f"[test_logit_mse_fp16_vs_int8] MSE = {mse:.3e}")
+    assert mse < LOGIT_MSE_BAR, (
+        f"logit MSE {mse:.3e} exceeds M6 bar {LOGIT_MSE_BAR:.0e} "
+        f"(docs/int8-design.md §7)"
     )
