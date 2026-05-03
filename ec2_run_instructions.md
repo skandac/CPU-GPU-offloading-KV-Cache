@@ -235,15 +235,23 @@ needs matching majors.
 
 ---
 
-## 3. Clone NEO and install
+## 3. Clone the repo and install
 
-### 3.1 Clone the branch with M5-M10
+> **You do not need to fork the original NEO repo.** This project's repo
+> (`skandac/CPU-GPU-offloading-KV-Cache`) already contains the full NEO
+> codebase plus all M5–M11 INT8 work as a single working tree. Clone it
+> directly — do not also clone upstream NEO separately.
+
+### 3.1 Clone the repo
 
 ```bash
 cd ~
-git clone https://github.com/<your-fork>/NEO.git
-cd NEO
-git checkout <branch-with-int8-work>
+git clone https://github.com/skandac/CPU-GPU-offloading-KV-Cache.git
+cd CPU-GPU-offloading-KV-Cache
+
+# main already contains M5-M11. If your INT8 work is on a non-main
+# branch, check it out here:
+# git checkout <branch-with-int8-work>
 
 # Sanity-check that the new files are present.
 ls docs/int8-design.md
@@ -270,18 +278,18 @@ pip install 'huggingface_hub[cli]'
 ### 3.3 Build the CPU operator (pacpu) for Llama-3-8B
 
 ```bash
-cd ~/NEO/pacpu
+cd ~/CPU-GPU-offloading-KV-Cache/pacpu
 bash build.sh llama3_8b 1      # model name + TP degree
-cd ~/NEO
+cd ~/CPU-GPU-offloading-KV-Cache
 ls pacpu/build/libpacpu-llama3_8b-tp1.so   # should exist
 ```
 
 If you also want to run the 7B fig6c reproduction, build for that too:
 
 ```bash
-cd ~/NEO/pacpu
+cd ~/CPU-GPU-offloading-KV-Cache/pacpu
 bash build.sh llama2_7b 1
-cd ~/NEO
+cd ~/CPU-GPU-offloading-KV-Cache
 ```
 
 Switching between the two libraries is controlled by
@@ -331,17 +339,17 @@ cat evaluation/configs/config-a10-8b.json
 ### 5.1 WikiText-2 (perplexity)
 
 ```bash
-mkdir -p ~/NEO/benchmarks/data
+mkdir -p ~/CPU-GPU-offloading-KV-Cache/benchmarks/data
 cd /tmp
 curl -L https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-raw-v1.zip -o wt2.zip
-unzip -q wt2.zip -d ~/NEO/benchmarks/data/
-ls ~/NEO/benchmarks/data/wikitext-2-raw/wiki.test.raw
+unzip -q wt2.zip -d ~/CPU-GPU-offloading-KV-Cache/benchmarks/data/
+ls ~/CPU-GPU-offloading-KV-Cache/benchmarks/data/wikitext-2-raw/wiki.test.raw
 ```
 
 ### 5.2 HumanEval
 
 ```bash
-cd ~/NEO/benchmarks/data
+cd ~/CPU-GPU-offloading-KV-Cache/benchmarks/data
 curl -L https://github.com/openai/human-eval/raw/master/data/HumanEval.jsonl.gz -o HumanEval.jsonl.gz
 gunzip HumanEval.jsonl.gz
 ls HumanEval.jsonl
@@ -354,13 +362,13 @@ python - <<'PY'
 import json
 from datasets import load_dataset
 ds = load_dataset("cnn_dailymail", "3.0.0", split="test")
-with open("/home/ubuntu/NEO/benchmarks/data/cnndm_test_sample.jsonl", "w") as f:
+with open("/home/ubuntu/CPU-GPU-offloading-KV-Cache/benchmarks/data/cnndm_test_sample.jsonl", "w") as f:
     for i, row in enumerate(ds):
         if i >= 500: break
         f.write(json.dumps({"article": row["article"], "highlights": row["highlights"]}) + "\n")
 print("done")
 PY
-ls ~/NEO/benchmarks/data/cnndm_test_sample.jsonl
+ls ~/CPU-GPU-offloading-KV-Cache/benchmarks/data/cnndm_test_sample.jsonl
 ```
 
 ---
@@ -381,7 +389,7 @@ mkdir -p ~/report/{01_baseline,02_smoke,03_quality,04_perf,05_ablation}
 ### 7.1 Component unit tests (CPU-only, ~1 minute)
 
 ```bash
-cd ~/NEO
+cd ~/CPU-GPU-offloading-KV-Cache
 pytest tests/test_int8_transfer.py tests/test_int8_correctness.py -v \
     2>&1 | tee ~/report/02_smoke/unit_tests.log
 ```
@@ -420,7 +428,7 @@ The paper ships `evaluation/reproduce-fig10a.py` for Llama-3-8B / A10G
 demo; bump to 2000 for paper-quality numbers.
 
 ```bash
-cd ~/NEO
+cd ~/CPU-GPU-offloading-KV-Cache
 
 # Bump request count if you want the full curve. Find the line that
 # sets the number and increase to 2000. The script's variable name
@@ -477,7 +485,7 @@ number on broken logits is worthless. Bars per
 ### 9.1 Perplexity (HF adapter — no server required)
 
 ```bash
-cd ~/NEO
+cd ~/CPU-GPU-offloading-KV-Cache
 for v in fp16-neo int8-cpu-kv int8-transfer; do
     python benchmarks/run_perplexity.py \
         --variant $v \
@@ -556,7 +564,7 @@ Only enter this stage after §9 has passed its bars.
 ### 10.1 Throughput
 
 ```bash
-cd ~/NEO
+cd ~/CPU-GPU-offloading-KV-Cache
 for v in fp16-neo int8-cpu-kv int8-transfer vllm; do
     python benchmarks/run_throughput.py \
         --variant $v \
@@ -620,7 +628,7 @@ Expectation: `int8-cpu-kv` peak RSS ≈ ½ of `fp16-neo` peak RSS.
 ## 11. M10 — granularity ablation (Stage 7)
 
 ```bash
-cd ~/NEO
+cd ~/CPU-GPU-offloading-KV-Cache
 bash scripts/run_ablation.sh \
     --variant both \
     --config evaluation/configs/config-a10-8b.json \
@@ -730,7 +738,7 @@ To regenerate any plots from the raw CSVs:
 
 ```bash
 # From wherever you extracted neo_report.tar.gz
-python ~/NEO/scripts/plot_headtohead.py \
+python ~/CPU-GPU-offloading-KV-Cache/scripts/plot_headtohead.py \
     --throughput-dir ./report/04_perf \
     --latency-dir    ./report/04_perf \
     --out ./report/plots
