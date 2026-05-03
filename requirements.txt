@@ -1,3 +1,6 @@
+# =============================================================================
+# Core engine dependencies (NEO baseline)
+# =============================================================================
 fastapi>=0.111
 ray[default]>=2.21
 safetensors>=0.4.3
@@ -5,3 +8,45 @@ transformers>=4.40
 uvicorn>=0.29
 vllm_flash_attn>=2.6.1
 matplotlib
+
+# torch is the load-bearing runtime dependency. We pin minimum 2.4 because
+# csrc/setup.py uses torch.utils.cpp_extension.CUDAExtension and torch 2.4+
+# is what NEO's MLSys'25 build chain assumes. Install the build matching
+# your CUDA toolkit, e.g.:
+#     pip install torch>=2.4 --index-url https://download.pytorch.org/whl/cu121
+torch>=2.4
+
+# numpy is a transitive dep of torch + matplotlib but pinned here so it's
+# resolved consistently across the benchmark scripts and unit tests.
+numpy
+
+# =============================================================================
+# INT8 evaluation / quality benchmarks (this fork — M5–M11)
+# =============================================================================
+# Required by benchmarks/run_perplexity.py and benchmarks/run_humaneval.py
+# for HuggingFace model loading via from_pretrained() on Llama-3-class models.
+accelerate>=0.30
+
+# Required by benchmarks/run_rouge.py — Google's official ROUGE
+# implementation used for the summarization-quality arm of the M8 evals.
+rouge-score>=0.1.2
+
+# Required by benchmarks/run_perplexity.py for WikiText-2 dataset loading
+# (load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')).
+datasets>=2.18
+
+# Required by scripts/plot_headtohead.py and scripts/compare_to_paper.py
+# for CSV aggregation and table building.
+pandas>=2.0
+
+# =============================================================================
+# Test harness (CPU-only — runs without a GPU)
+# =============================================================================
+pytest>=8.0
+
+# =============================================================================
+# Optional — see ec2_run_instructions.md §0 for environment-specific notes
+# =============================================================================
+# huggingface_hub: pulled in transitively by transformers, but pinning
+# explicitly keeps the snapshot_download API stable across environments.
+huggingface_hub>=0.23
