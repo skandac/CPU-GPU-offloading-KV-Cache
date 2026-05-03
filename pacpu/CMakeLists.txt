@@ -12,7 +12,7 @@ set(TARGET_SOURCES "pacpu.cpp" "pacpu.ispc")
 set(ISPC_ARCH "x86-64")
 set(ISPC_ARCH_BIT "64")
 
-# Set a small number here, we don't actually compile any CUDA kernels
+# Set a small number here, we don't actually compile any CUDA kernel
 set(CMAKE_CUDA_ARCHITECTURES 70)
 
 enable_language(ISPC)

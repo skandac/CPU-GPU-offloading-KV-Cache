@@ -11,7 +11,7 @@ class EngineConfig:
     Configuration for the SwiftLLM engine.
     """
     
-    # Model loading parameters
+    # Model loading parameter
     model_path: str
     use_dummy: bool
 

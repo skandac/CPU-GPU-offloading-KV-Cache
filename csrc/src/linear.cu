@@ -14,7 +14,7 @@ void cublas_init_handle(){
 }
 
 /* Row major 
- *   A (m x k) einsum(ik, jk -> ij) B (n x k) = C (m x n) 
+ *   A (m x k) einsum(ik, jk -> ij) B (n x k) = C (m x n) //
  * Equivalent to column major 
  *   B (n x k) @ A^T (k x m) = C^T (m x n)
  */

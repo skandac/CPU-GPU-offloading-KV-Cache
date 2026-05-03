@@ -5,7 +5,7 @@ from swiftllm.engine_config import EngineConfig
 from swiftllm.server.engine import Engine, AsyncEngine
 from swiftllm.structs import RawRequest
 
-# The Model for offline inference
+# The Model for offline inferences
 from swiftllm.worker.model import LlamaModel, ModelPerfResult
 from swiftllm.structs import create_request, SubBatch
 

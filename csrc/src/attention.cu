@@ -19,7 +19,7 @@ __global__ void paged_attention_phase1(
   const int block_table_width
 ) {
   // grid shape: [num_decoding_seqs, NUM_Q_HEADS, num_seq_blocks]
-  // block shape: [HEAD_DIM]
+  // block shape: [HEAD_DIM]]
   const int QH_PER_KVH = NUM_Q_HEADS / NUM_KV_HEADS;
   const int batch_id = blockIdx.x;
   const int qhead_id = blockIdx.y;

@@ -15,7 +15,7 @@ typedef float itmd_t;
 typedef float otpt_t;
 
 #define GEMM cblas_hgemm
-#define HEAD_DIM 128 // Constant for all models
+#define HEAD_DIM 128 // Constant for all model
 #define BLOCK_SIZE 16
 
 #if defined(LLAMA3_8B)

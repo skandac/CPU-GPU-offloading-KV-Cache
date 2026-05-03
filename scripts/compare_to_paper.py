@@ -5,7 +5,7 @@ Loads the raw JSON result files produced by evaluation/reproduce-fig6c.py and
 evaluation/reproduce-fig10a.py, recomputes the same metrics used by
 evaluation/illustrator.py, and prints a comparison table showing % deviation
 from the numbers reported in the NEO MLSys'25 paper
-(https://arxiv.org/abs/2411.01142).
+(https://arxiv.org/abs/2411.01142)..
 
 USAGE (from repo root, with the 'neo' conda env active):
     python scripts/compare_to_paper.py [--results-dir PATH]

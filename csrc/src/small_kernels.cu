@@ -1,6 +1,6 @@
 /*
  * Code adapted from https://github.com/LLMServe/SwiftTransformer/tree/main
- */
+ **/
 
 #include "small_kernels.h"
 

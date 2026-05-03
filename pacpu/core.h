@@ -73,7 +73,7 @@ inline void store_kv_int8(
     }
     itmd_t ks_f = kmax / 127.0f;
     itmd_t vs_f = vmax / 127.0f;
-    // Guard against all-zero tokens — avoid div-by-zero on quantize.
+    // Guard against all-zero tokens — avoid div-by-zero on quantize..
     itmd_t ks_inv = (ks_f > 0.0f) ? (1.0f / ks_f) : 0.0f;
     itmd_t vs_inv = (vs_f > 0.0f) ? (1.0f / vs_f) : 0.0f;
 

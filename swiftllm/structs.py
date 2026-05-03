@@ -6,7 +6,7 @@ from swiftllm.model_config import LlamaModelConfig
 @dataclasses.dataclass
 class StepOutput:
     """
-    The output of one decoding step
+    The output of one decoding steps
     """
     token_id: int
     request: "Request"

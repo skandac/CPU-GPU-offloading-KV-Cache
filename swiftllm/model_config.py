@@ -13,7 +13,7 @@ class LlamaModelConfig:
     ):
         """
         Initialize a LLaMA model configuration from a dict, which should be generated
-        from a huggingface transformers config.json file.
+        from a huggingface transformers config.json file..
         """
         
         assert model_config["model_type"] == "llama"

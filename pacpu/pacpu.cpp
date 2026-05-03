@@ -6,7 +6,7 @@
 
 typedef at::Half at_data_t;
 
-// #define USE_ATEN_OPER
+// #define USE_ATEN_OPER.
 #ifdef USE_ATEN_OPER
 #include <ATen/TensorIndexing.h>
 #include <ATen/TensorOperators.h>
